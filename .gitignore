@@ -3,6 +3,13 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# ignore these
+.env
+__pycache__/
+*.pyc
+*.db
+*.json
+
 # C extensions
 *.so
 
