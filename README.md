@@ -16,26 +16,26 @@ Built for music nerds. Powered by Python + Spotify + Discord.
 - Leaderboards, status reports, and more!
 - Custom AI generated artwork for playlists
 
-
+---
 ## Examples
 
--!playlist add Group-Playlist to Music                            #Adds a playlist called 'Group-Playlist to the Music Channel of a discord server 
--!add For Whom the Bell Tolls - Metallica                         #Adds a song to the channels playlist by Song Name - Band Name
--!add For Whom the Bell Tolls - Metallica - Ride the Lightning    #Adds a song to the channels playlist by Song Name - Band Name - Album Name
--!add <spotify track URL>                                         #Adds a song to the channels playlist by Spotify URL
--!remove For Whom the Bell Tolls                                  #Removes song from the channels playlist
--!link                                                            #Retreives a link to the channels playlist
--!countdown 3                                                     #Starts a countdown which requires a specific number of users to react to, to initiate
--!reset                                                           #Resets playlist mapping for the channel
--!status                                                          #Shows songs in the current playlist and who submitted them
--!quota 3                                                         #Sets a limit on the number of songs able to be submitted to the channels playlist
--!limit 10                                                        #Sets a limit in minutes for the max playtime a song can be
--!leaderboards                                                    #Displays top contributers to the channels playlist
--!user                                                            #sets user level permissions for the bot
--!organizer                                                       #sets organizer level permissions for the bot
--!lphelp                                                          #displays available bot commands 
--!art <on/off>                                                    #enable channel artwork
--!refreshart`                                                     #geneates new playlist art
+- !playlist add Group-Playlist to Music                            #Adds a playlist called 'Group-Playlist to the Music Channel of a discord server 
+- !add For Whom the Bell Tolls - Metallica                         #Adds a song to the channels playlist by Song Name - Band Name
+- !add For Whom the Bell Tolls - Metallica - Ride the Lightning    #Adds a song to the channels playlist by Song Name - Band Name - Album Name
+- !add <spotify track URL>                                         #Adds a song to the channels playlist by Spotify URL
+- !remove For Whom the Bell Tolls                                  #Removes song from the channels playlist
+- !link                                                            #Retreives a link to the channels playlist
+- !countdown 3                                                     #Starts a countdown which requires a specific number of users to react to, to initiate
+- !reset                                                           #Resets playlist mapping for the channel
+- !status                                                          #Shows songs in the current playlist and who submitted them
+- !quota 3                                                         #Sets a limit on the number of songs able to be submitted to the channels playlist
+- !limit 10                                                        #Sets a limit in minutes for the max playtime a song can be
+- !leaderboards                                                    #Displays top contributers to the channels playlist
+- !user                                                            #sets user level permissions for the bot
+- !organizer                                                       #sets organizer level permissions for the bot
+- !lphelp                                                          #displays available bot commands 
+- !art <on/off>                                                    #enable channel artwork
+- !refreshart`                                                     #geneates new playlist art
 
 ##  Permissions Overview
 
