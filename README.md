@@ -14,6 +14,7 @@ Built for music nerds. Powered by Python + Spotify + Discord.
 - Countdown start with emoji reactions
 - User/Organizer permissions
 - Leaderboards, status reports, and more!
+- Custom AI generated artwork for playlists
 
 
 ## Examples
@@ -33,8 +34,8 @@ Built for music nerds. Powered by Python + Spotify + Discord.
 !user                                                            #sets user level permissions for the bot
 !organizer                                                       #sets organizer level permissions for the bot
 !lphelp                                                          #displays available bot commands 
-
-
+!art <on/off>                                                    #enable channel artwork
+!refreshart`                                                     #geneates new playlist art
 
 ##  Permissions Overview
 
@@ -55,7 +56,8 @@ Built for music nerds. Powered by Python + Spotify + Discord.
 | `!organizer @mention` *(grant organizer)*  | ✅            | ❌        |
 | `!whoami` *(check your role)*              | ✅            | ✅        |
 | `!lphelp` *(view all commands)*            | ✅            | ✅        |
-
+| `!art <on/off>`                            | ✅            | ❌        |
+| `!refreshart`                              | ✅            | ❌        |
 
 If you liked this project, consider buying me a coffee
 https://coff.ee/agreatsquirrel
