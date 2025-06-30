@@ -42,13 +42,22 @@ load_dotenv()
 
 PERMISSIONS_FILE = "permissions.json"
 
-try:
-    with open(PERMISSIONS_FILE, "r") as f:
-        permissions = json.load(f)
-    print(f"[DEBUG] Loaded permissions: {json.dumps(permissions, indent=2)}")
-except Exception as e:
-    print(f"[ERROR] Could not load permissions: {e}")
-    permissions = {}
+
+permissions = {}
+if os.path.exists(PERMISSIONS_FILE):
+    try:
+        with open(PERMISSIONS_FILE, "r") as f:
+            permissions = json.load(f)
+
+        # print(f"[DEBUG] Loaded permissions: {json.dumps(permissions, indent=2)}")
+    except json.JSONDecodeError as e:
+        print(f"[ERROR] Failed to parse permissions file: {e}")
+        # Optional: back up the corrupted file
+        os.rename(PERMISSIONS_FILE, PERMISSIONS_FILE + ".bak")
+        print(f"[INFO] Corrupted permissions file backed up.")
+else:
+    print("[INFO] No permissions file found, starting fresh.")
+
 
 
 
@@ -68,7 +77,6 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # === SPOTIFY AUTH ===
-# scope = "playlist-modify-public playlist-modify-private"
 sp = spotipy.Spotify(auth_manager=SpotifyOAuth(
     client_id=SPOTIFY_CLIENT_ID,
     client_secret=SPOTIFY_CLIENT_SECRET,
@@ -77,17 +85,20 @@ sp = spotipy.Spotify(auth_manager=SpotifyOAuth(
 ))
 
 # === TRACKING ===
-SUBMISSIONS_FILE = "submissions.json"
+SUBMISSIONS_FILE = "user_submissions.json"
 PLAYLIST_MAP_FILE = "playlist_map.json"
-QUOTA_FILE = "quotas.json"
-LIMIT_FILE = "limits.json"
+QUOTA_FILE = "submission_quotas.json"
+LIMIT_FILE = "duration_limits.json"
 MAX_DURATION_MS = 7 * 60 * 1000
 
 if os.path.exists(SUBMISSIONS_FILE):
     with open(SUBMISSIONS_FILE, "r") as f:
         user_submissions = json.load(f)
-else:
+
+else: 
     user_submissions = {}
+
+print(f"[DEBUG] Loaded submissions: {json.dumps(user_submissions, indent=2)}")
 
 try:
     with open(PLAYLIST_MAP_FILE, "r") as f:
@@ -96,24 +107,84 @@ except Exception as e:
     print(f"[ERROR] Could not load playlist_map.json: {e}")
     playlist_map = {}
 
-
 if os.path.exists(QUOTA_FILE):
     with open(QUOTA_FILE, "r") as f:
-        quotas = json.load(f)
+        submission_quotas = json.load(f)
 else:
-    quotas = {}
+    submission_quotas = {}
 
 if os.path.exists(LIMIT_FILE):
     with open(LIMIT_FILE, "r") as f:
-        limits = json.load(f)
+        duration_limits = json.load(f)
 else:
-    limits = {}
+    duration_limits = {}
 
 if os.path.exists(ART_SETTING_FILE):
     with open(ART_SETTING_FILE, "r") as f:
         art_settings = json.load(f)
 else:
     art_settings = {}
+
+
+# Role to allowed commands mapping
+ROLE_PERMISSIONS = {
+    "administrator": {
+        "add", "remove", "quota", "limit", "status", "link", "leaderboard", "countdown",
+        "user", "organizer", "administrator", "whoami", "lphelp",
+        "art", "artchannel", "refreshart", "reset", "playlist"
+    },
+    "organizer": {
+        "add", "remove", "quota", "limit", "status", "link", "leaderboard", "countdown",
+        "user", "whoami", "lphelp"
+    },
+    "user": {
+        "add", "remove", "status", "leaderboard", "link", "whoami", "lphelp"
+    }
+}
+
+def ensure_permissions_structure(gid):
+    if gid not in permissions:
+        permissions[gid] = {
+            "administrators": [],
+            "organizers": [],
+            "users": [],
+        }
+    else:
+        for key in ["administrators", "organizers", "users"]:
+            if key not in permissions[gid]:
+                permissions[gid][key] = []
+
+
+def get_user_role(guild_id, user_id):
+    user_id = str(user_id)
+    guild_id = str(guild_id)
+    guild_perms = permissions.get(guild_id, {})
+
+    if user_id in guild_perms.get("administrators", []):
+        return "administrator"
+    elif user_id in guild_perms.get("organizers", []):
+        return "organizer"
+    elif user_id in guild_perms.get("users", []):
+        return "user"
+    else:
+        return None
+
+def has_permission(command_name, user_role):
+    allowed = ROLE_PERMISSIONS.get(user_role, set())
+    return command_name in allowed or user_role == "administrator"
+
+def get_permission_level(guild_id, user_id):
+    guild_perms = permissions.get(str(guild_id), {})
+    user_id = str(user_id)
+
+    if user_id in guild_perms.get("administrators", []):
+        return "Administrator"
+    elif user_id in guild_perms.get("organizers", []):
+        return "Organizer"
+    elif user_id in guild_perms.get("users", []):
+        return "User"
+    else:
+        return "No permissions"
 
 # === AI PROMPT GENERATION ===
 def generate_prompt():
@@ -184,92 +255,106 @@ def upload_playlist_cover(playlist_id, image_url):
     except Exception as e:
         print(f"[ERROR] Failed to upload playlist cover: {e}")
 
-@bot.event
-async def on_ready():
-    print(f"[READY] Logged in as {bot.user} (ID: {bot.user.id})")
 
 @bot.event
 async def on_message(message):
-    print(f"[DEBUG] Received message from {message.author}: {message.content}")
+    #print(f"[DEBUG] Received message from {message.author}: {message.content}")
     await bot.process_commands(message)
 
 
 @bot.command(name="add")
 async def add_to_playlist(ctx, *, song_query: str):
     try:
+        gid = str(ctx.guild.id)
+        cid = str(ctx.channel.id)
+        user_id = str(ctx.author.id)
+
         channel_name = ctx.channel.name
         playlist_id = playlist_map.get(channel_name)
+
         if not playlist_id:
             await ctx.send("No playlist linked to this channel.")
             return
 
-        user_id = str(ctx.author.id)
-        if playlist_id not in user_submissions:
-            user_submissions[playlist_id] = {}
-        if user_id not in user_submissions[playlist_id]:
-            user_submissions[playlist_id][user_id] = []
+        # === Ensure structure exists ===
+        if gid not in user_submissions:
+            user_submissions[gid] = {}
+        if playlist_id not in user_submissions[gid]:
+            user_submissions[gid][playlist_id] = {}
+        if user_id not in user_submissions[gid][playlist_id]:
+            user_submissions[gid][playlist_id][user_id] = []
 
-        user_quota = quotas.get(playlist_id, 2)
-        if len(user_submissions[playlist_id][user_id]) >= user_quota:
+        # === Quota lookup ===
+        user_quota = submission_quotas.get(gid, {}).get(cid, 2)
+        user_tracks = user_submissions[gid][playlist_id][user_id]
+
+        if len(user_tracks) >= user_quota:
             await ctx.send(f"{ctx.author.mention}, you've hit your submission limit of {user_quota}.")
             return
 
-        # === Check if input is a Spotify track link ===
+        # === Track Lookup ===
         if "open.spotify.com/track" in song_query:
             track_id = song_query.split("track/")[-1].split("?")[0]
             track = sp.track(track_id)
         else:
-            # === Parse song, artist, optional album ===
             parts = [part.strip() for part in song_query.split('-')]
             if len(parts) < 2:
-                await ctx.send("Please format as: song - artist [ - album ] or provide a Spotify track link")
+                await ctx.send("Please format as: song - artist [ - album ] or provide a Spotify link")
                 return
 
             song, artist = parts[0], parts[1]
             album = parts[2] if len(parts) > 2 else None
-
-            q = f"track:{song} artist:{artist}"
-            if album:
-                q += f" album:{album}"
-
+            q = f"track:{song} artist:{artist}" + (f" album:{album}" if album else "")
             results = sp.search(q=q, type='track', limit=1)
-            if not results['tracks']['items']:
+
+            if not results['tracks']['items']: # type: ignore
                 await ctx.send(f"Couldn't find: {song} by {artist}" + (f" on album {album}" if album else ""))
                 return
-            track = results['tracks']['items'][0]
+
+            track = results['tracks']['items'][0] # type: ignore
             track_id = track['id']
 
-        duration = track['duration_ms']
+        # === Duration Limit ===
+        duration = track['duration_ms'] # type: ignore
+
+        # Grab the duration limit for this guild/channel, or fall back to default
+        print(f"[DEBUG] Guild ID: {gid}, Channel ID: {cid}")
+        print(f"[DEBUG] Duration limits raw: {duration_limits}")
+        print(f"[DEBUG] Duration for this channel: {duration_limits.get(gid, {}).get(cid)}")
+
+        limit_minutes = duration_limits.get(gid, {}).get(cid, MAX_DURATION_MS // 60000)
+        track_limit = limit_minutes * 60000
+
+        if duration > track_limit:
+            await ctx.send(f"Track too long (limit is {limit_minutes} minutes).")
+            return
+
 
         # === Check for duplicates ===
-        existing = [tid for all_t in user_submissions[playlist_id].values() for tid in all_t]
-        if track_id in existing:
-            await ctx.send("That track has already been submitted to this playlist.")
+        all_submitted = [tid for u in user_submissions[gid][playlist_id].values() for tid in u]
+        if track_id in all_submitted:
+            await ctx.send("This track has already been submitted.")
             return
 
-        track_limit = limits.get(playlist_id, MAX_DURATION_MS)
-        if duration > track_limit:
-            await ctx.send(f"Track too long (limit is {track_limit // 60000} minutes).")
-            return
-
+        # === Add and persist ===
         sp.playlist_add_items(playlist_id, [track_id])
-        user_submissions[playlist_id][user_id].append(track_id)
+        user_tracks.append(track_id)
 
         with open(SUBMISSIONS_FILE, "w") as f:
             json.dump(user_submissions, f)
 
         embed = discord.Embed(
-    title=track['name'],
-    description=f"by {track['artists'][0]['name']}\nAlbum: {track['album']['name']}",
-    url=track['external_urls']['spotify']
-)
-
-        embed.set_thumbnail(url=track['album']['images'][0]['url'])
-        await ctx.send("Track added:", embed=embed)
+            title=track['name'], # type: ignore
+            description=f"by {track['artists'][0]['name']}\nAlbum: {track['album']['name']}", # type: ignore
+            url=track['external_urls']['spotify'] # type: ignore
+        )
+        embed.set_thumbnail(url=track['album']['images'][0]['url']) # type: ignore
+        await ctx.send("✅ Track added:", embed=embed)
 
     except Exception as e:
         print(f"[ERROR] {e}")
         await ctx.send(f"Error: {str(e)}")
+
 
 @bot.command(name="link")
 async def playlist_link(ctx):
@@ -295,9 +380,9 @@ async def create_playlist(ctx, action: str, *, args: str):
             return
 
         playlist_name, channel_name = args.split(" to ", 1)
-        user_id = sp.current_user()["id"]
+        user_id = sp.current_user()["id"] # type: ignore
         new_playlist = sp.user_playlist_create(user_id, playlist_name, public=True)
-        playlist_id = new_playlist['id']
+        playlist_id = new_playlist['id'] # type: ignore
 
         playlist_map[channel_name] = playlist_id
         with open(PLAYLIST_MAP_FILE, "w") as f:
@@ -346,135 +431,291 @@ async def toggle_art(ctx, setting: str):
     with open(ART_SETTING_FILE, "w") as f:
         json.dump(art_settings, f)
 
+
 @bot.command(name="refreshart")
-async def refresh_art(ctx):
+async def refresh_art(ctx, *, custom_prompt: str = None): # type: ignore
     gid = str(ctx.guild.id)
     cid = str(ctx.channel.id)
 
     if not is_organizer(gid, ctx.author.id):
-        await ctx.send("You do not have permission to refresh playlist art.")
+        await ctx.send("🚫 You do not have permission to refresh playlist art.")
         return
 
     if not art_settings.get(gid, {}).get(cid, False):
-        await ctx.send("Art is not enabled for this channel.")
+        await ctx.send("🎨 Art is not enabled for this channel.")
         return
 
     playlist_id = playlist_map.get(ctx.channel.name)
     if not playlist_id:
-        await ctx.send("No playlist is linked to this channel.")
+        await ctx.send("⚠️ No playlist is linked to this channel.")
         return
 
     try:
-        prompt = generate_prompt()
+        prompt = custom_prompt if custom_prompt else generate_prompt()
+        print(f"[DEBUG] Using prompt: {prompt}")
+
         image_url = generate_dalle_image(prompt)
+        print(f"[DEBUG] Downloaded image from: {image_url}")
+
         upload_playlist_cover(playlist_id, image_url)
+        print(f"[INFO] Playlist cover updated successfully.")
+        print(f"[DEBUG] Uploaded playlist cover for: {playlist_id}")
+
         await ctx.send(f"🎨 Playlist art refreshed with prompt: `{prompt}`")
+
+        # Send image to art channel if it's configured
+        art_channel_id = permissions.get(gid, {}).get("art_channel")
+        if art_channel_id:
+            art_channel = bot.get_channel(int(art_channel_id))
+            if art_channel:
+                embed = discord.Embed(title="🖼️ New Playlist Art", description=f"Prompt: `{prompt}`")
+                embed.set_image(url=image_url)
+                await art_channel.send(embed=embed) # type: ignore
+            else:
+                print(f"[WARN] Art channel not found: {art_channel_id}")
+
     except Exception as e:
-        print(f"[ERROR] {e}")
+        print(f"[ERROR] Failed to refresh playlist art: {e}")
         await ctx.send("⚠️ Failed to refresh playlist art.")
+
+@bot.command(name="prompt")
+async def generate_ai_prompt(ctx):
+    try:
+        prompt = generate_prompt()
+        await ctx.send(f"🎨 Generated AI prompt: `{prompt}`")
+    except Exception as e:
+        print(f"[ERROR] Failed to generate prompt: {e}")
+        await ctx.send("⚠️ Failed to generate AI prompt.")
+
+@bot.command(name="artchannel")
+async def set_art_channel(ctx, *, channel_name: str):
+    gid = str(ctx.guild.id)
+    uid = str(ctx.author.id)
+
+    if not is_organizer(gid, uid):
+        await ctx.send("You do not have permission to set the art channel.")
+        return
+
+    # Find the channel by name
+    art_channel = discord.utils.get(ctx.guild.text_channels, name=channel_name)
+    if not art_channel:
+        await ctx.send(f"⚠️ Channel '{channel_name}' not found.")
+        return
+
+    # Ensure safe permissions structure without overwriting
+    ensure_permissions_structure(gid)
+
+    permissions[gid]["art_channel"] = str(art_channel.id)
+
+    # Backup existing file (optional but clutch while testing)
+    try:
+        import shutil
+        shutil.copy(PERMISSIONS_FILE, PERMISSIONS_FILE + ".bak")
+    except Exception as e:
+        print(f"[WARN] Couldn't backup permissions file: {e}")
+
+    # Safe save
+    try:
+
+        import traceback
+
+        print(f"[DEBUG] Writing to {PERMISSIONS_FILE} from {ctx.command.name if 'ctx' in locals() else 'unknown'}")
+        traceback.print_stack()
+
+        with open(PERMISSIONS_FILE, "w") as f:
+            json.dump(permissions, f, indent=4)
+        print("[DEBUG] Permissions saved successfully.")
+    except Exception as e:
+        print(f"[ERROR] Failed to save permissions: {e}")
+
+    await ctx.send(f"✅ Playlist art will now be posted in #{art_channel.name}")
 
 
 @bot.command(name="status")
 async def status(ctx):
     try:
+        gid = str(ctx.guild.id)
         channel_name = ctx.channel.name
         playlist_id = playlist_map.get(channel_name)
+
         if not playlist_id:
             await ctx.send("No playlist linked to this channel.")
             return
 
-        playlist = sp.playlist_items(playlist_id, limit=50)
-        track_info = {}
-        for user_id, tracks in user_submissions.get(playlist_id, {}).items():
-            for tid in tracks:
-                track_info.setdefault(tid, []).append(user_id)
+        playlist_items = sp.playlist_items(playlist_id, limit=100)["items"] # type: ignore
+        submission_data = user_submissions.get(gid, {}).get(playlist_id, {})
 
-        message = "**Playlist Submissions:**\n"
-        for item in playlist['items']:
-            track = item['track']
-            users = track_info.get(track['id'], [])
-            user_mentions = ", ".join(f"<@{uid}>" for uid in users)
-            message += f"{track['name']} by {track['artists'][0]['name']} - Submitted by {user_mentions}\n"
+        status_lines = []
+        for item in playlist_items:
+            track = item["track"]
+            track_id = track["id"]
+            user_name = "Unknown"
 
-        await ctx.send(message)
+            # Find who submitted the track
+            for user_id, tracks in submission_data.items():
+                if track_id in tracks:
+                    member = ctx.guild.get_member(int(user_id))
+                    user_name = member.display_name if member else f"<@{user_id}>"
+                    break
+
+            status_lines.append(f"{track['name']} by {track['artists'][0]['name']} - Submitted by {user_name}")
+
+        if status_lines:
+            await ctx.send("**Playlist Submissions:**\n" + "\n".join(status_lines))
+        else:
+            await ctx.send("No tracks found in the playlist.")
 
     except Exception as e:
         print(f"[ERROR] {e}")
         await ctx.send(f"Error: {str(e)}")
+
+
 
 @bot.command(name="quota")
-async def set_quota(ctx, quota: int):
-    try:
-        channel_name = ctx.channel.name
-        playlist_id = playlist_map.get(channel_name)
-        if not playlist_id:
-            await ctx.send("No playlist linked to this channel.")
-            return
+async def set_quota(ctx, quota: int = None): # type: ignore
+    gid = str(ctx.guild.id)
+    cid = str(ctx.channel.id)
+    role = get_user_role(gid, ctx.author.id)
 
-        quotas[playlist_id] = quota
-        with open(QUOTA_FILE, "w") as f:
-            json.dump(quotas, f)
+    print(f"[DEBUG] User {ctx.author.id} role in guild {gid}: {role}")
 
-        await ctx.send(f"Quota set to {quota} track(s) per user for this playlist.")
+    if not has_permission("quota", role):
+        await ctx.send("🚫 You don't have permission to set or view the quota.")
+        return
 
-    except Exception as e:
-        print(f"[ERROR] {e}")
-        await ctx.send(f"Error: {str(e)}")
+    if quota is None:
+        current_quota = submission_quotas.get(gid, {}).get(cid)
+        if current_quota is not None:
+            await ctx.send(f"📊 Current quota is `{current_quota}` tracks per user.")
+        else:
+            await ctx.send("📊 No quota is set for this channel.")
+        return
+
+    if gid not in submission_quotas:
+        submission_quotas[gid] = {}
+    submission_quotas[gid][cid] = quota
+
+    with open(QUOTA_FILE, "w") as f:
+        json.dump(submission_quotas, f)
+
+    await ctx.send(f"✅ Quota set to `{quota}` track(s) per user for this playlist.")
+
 
 @bot.command(name="limit")
-async def set_limit(ctx, minutes: int):
-    try:
-        channel_name = ctx.channel.name
-        playlist_id = playlist_map.get(channel_name)
-        if not playlist_id:
-            await ctx.send("No playlist linked to this channel.")
-            return
+async def set_limit(ctx, minutes: int = None): # type: ignore
+    gid = str(ctx.guild.id)
+    cid = str(ctx.channel.id)
+    role = get_user_role(gid, ctx.author.id)
 
-        limits[playlist_id] = minutes * 60000
-        with open(LIMIT_FILE, "w") as f:
-            json.dump(limits, f)
+    if not has_permission("limit", role):
+        await ctx.send("🚫 You don't have permission to set the track limit.")
+        return
 
-        await ctx.send(f"Track duration limit set to {minutes} minutes.")
+    if minutes is None:
+        current_limit = duration_limits.get(gid, {}).get(cid)
+        if current_limit:
+            await ctx.send(f"⏱️ Current track duration limit is `{current_limit}` minutes.")
+        else:
+            await ctx.send("⏱️ No duration limit is set for this channel.")
+        return
 
-    except Exception as e:
-        print(f"[ERROR] {e}")
-        await ctx.send(f"Error: {str(e)}")
+    # Save the new limit
+    if gid not in duration_limits:
+        duration_limits[gid] = {}
+    duration_limits[gid][cid] = minutes
+
+    with open(LIMIT_FILE, "w") as f:
+        json.dump(duration_limits, f)
+
+    await ctx.send(f"✅ Track duration limit set to `{minutes}` minutes.")
+
 
 @bot.command(name="reset")
-async def reset_submissions(ctx):
+async def reset_playlist(ctx):
     try:
+        gid = str(ctx.guild.id)
         channel_name = ctx.channel.name
         playlist_id = playlist_map.get(channel_name)
+
         if not playlist_id:
             await ctx.send("No playlist linked to this channel.")
             return
 
-        user_submissions[playlist_id] = {}
-        with open(SUBMISSIONS_FILE, "w") as f:
-            json.dump(user_submissions, f)
+        # Fetch all tracks from the playlist
+        tracks = []
+        results = sp.playlist_items(playlist_id, limit=100)
+        tracks.extend(results["items"]) # type: ignore
+        while results["next"]: # type: ignore
+            results = sp.next(results)
+            tracks.extend(results["items"]) # type: ignore
 
-        await ctx.send("Submissions reset for this playlist.")
+        # Collect all track IDs
+        track_ids = [item["track"]["id"] for item in tracks if item["track"]]
+
+        if not track_ids:
+            await ctx.send("Playlist is already empty.")
+            return
+
+        # Remove all tracks in chunks of 100 (API limit)
+        for i in range(0, len(track_ids), 100):
+            chunk = track_ids[i:i+100]
+            sp.playlist_remove_all_occurrences_of_items(playlist_id, chunk)
+
+        # Clear submissions in our structure
+        if gid in user_submissions and playlist_id in user_submissions[gid]:
+            del user_submissions[gid][playlist_id]
+            if not user_submissions[gid]:  # cleanup if empty
+                del user_submissions[gid]
+
+        with open(SUBMISSIONS_FILE, "w") as f:
+            json.dump(user_submissions, f, indent=2)
+
+        await ctx.send("💥 Playlist has been reset. All tracks removed.")
 
     except Exception as e:
         print(f"[ERROR] {e}")
         await ctx.send(f"Error: {str(e)}")
+
 
 @bot.command(name="remove")
 async def remove_track(ctx, *, query: str):
     try:
+        gid = str(ctx.guild.id)
+        cid = str(ctx.channel.id)
+        user_id = str(ctx.author.id)
+
         channel_name = ctx.channel.name
         playlist_id = playlist_map.get(channel_name)
+
         if not playlist_id:
             await ctx.send("No playlist linked to this channel.")
             return
 
-        user_id = str(ctx.author.id)
-        if playlist_id not in user_submissions or user_id not in user_submissions[playlist_id]:
+        # New structure check
+
+        playlist_items = sp.playlist_items(playlist_id, limit=100)["items"] # type: ignore
+        # print(f"[DEBUG] Guild ID: {gid}")
+        # print(f"[DEBUG] Playlist ID: {playlist_id}")
+        # print(f"[DEBUG] User ID: {user_id}")
+        # print(f"[DEBUG] user_submissions keys: {list(user_submissions.keys())}")
+        # print(f"[DEBUG] user_submissions[gid] keys: {list(user_submissions.get(gid, {}).keys())}")
+        # print(f"[DEBUG] user_submissions[gid][playlist_id] keys: {list(user_submissions.get(gid, {}).get(playlist_id, {}).keys())}")
+
+        print(user_submissions)
+
+        submitted_ids = set(user_submissions[gid][playlist_id][user_id])
+
+        # print(f"[DEBUG] Submitted IDs: {submitted_ids}")
+        # for item in playlist_items:
+        #     print(f"[DEBUG] Track in playlist: {item['track']['name']} - {item['track']['id']}")
+
+
+        if gid not in user_submissions or \
+           playlist_id not in user_submissions[gid] or \
+           user_id not in user_submissions[gid][playlist_id]:
             await ctx.send("You have not submitted any tracks.")
             return
 
-        submitted_ids = set(user_submissions[playlist_id][user_id])
-        playlist_items = sp.playlist_items(playlist_id, limit=100)["items"]
 
         for item in playlist_items:
             track = item["track"]
@@ -483,12 +724,12 @@ async def remove_track(ctx, *, query: str):
 
             if track_id in submitted_ids and query.lower() in full_string:
                 sp.playlist_remove_all_occurrences_of_items(playlist_id, [track_id])
-                user_submissions[playlist_id][user_id].remove(track_id)
+                user_submissions[gid][playlist_id][user_id].remove(track_id)
 
                 with open(SUBMISSIONS_FILE, "w") as f:
                     json.dump(user_submissions, f)
 
-                await ctx.send(f"Removed: **{track['name']}** by {track['artists'][0]['name']}")
+                await ctx.send(f"🗑️ Removed: **{track['name']}** by {track['artists'][0]['name']}")
                 return
 
         await ctx.send("Could not find a matching track in your submissions.")
@@ -502,46 +743,62 @@ async def remove_track(ctx, *, query: str):
 @bot.command(name="leaderboard")
 async def leaderboard(ctx):
     try:
+        gid = str(ctx.guild.id)
         channel_name = ctx.channel.name
         playlist_id = playlist_map.get(channel_name)
+
         if not playlist_id:
             await ctx.send("No playlist linked to this channel.")
             return
 
-        counts = {}
-        for user_id, tracks in user_submissions.get(playlist_id, {}).items():
-            counts[user_id] = len(tracks)
+        submission_data = user_submissions.get(gid, {}).get(playlist_id, {})
+        if not submission_data:
+            await ctx.send("No submissions yet.")
+            return
 
-        sorted_leaderboard = sorted(counts.items(), key=lambda x: x[1], reverse=True)
-        message = "**Submission Leaderboard:**\n"
-        for user_id, count in sorted_leaderboard:
-            message += f"<@{user_id}> - {count} track(s)\n"
+        leaderboard_data = []
+        for user_id, tracks in submission_data.items():
+            count = len(tracks)
+            member = ctx.guild.get_member(int(user_id))
+            name = member.display_name if member else f"<@{user_id}>"
+            leaderboard_data.append((name, count))
 
-        await ctx.send(message)
+        # Sort descending by count
+        leaderboard_data.sort(key=lambda x: x[1], reverse=True)
+
+        msg_lines = ["**🎧 Submission Leaderboard:**"]
+        for i, (name, count) in enumerate(leaderboard_data, 1):
+            msg_lines.append(f"{i}. {name} — {count} track{'s' if count != 1 else ''}")
+
+        await ctx.send("\n".join(msg_lines))
 
     except Exception as e:
         print(f"[ERROR] {e}")
         await ctx.send(f"Error: {str(e)}")
 
-# === PERMISSION CHECKS ===
-def is_organizer(guild_id, user_id):
-    gid = str(guild_id)
-    uid = str(user_id)
-    return permissions.get(gid, {}).get("organizers", []) and uid in permissions[gid]["organizers"]
-
 
 def is_user(user_id):
-    return str(user_id) in permissions.get("users", []) or is_organizer(user_id)
+    return str(user_id) in permissions.get("users", []) or is_organizer(user_id) # type: ignore
+
+def is_administrator(gid, uid):
+    return str(uid) in permissions.get(str(gid), {}).get("administrators", [])
+
+def is_organizer(gid, uid):
+    return str(uid) in permissions.get(str(gid), {}).get("organizers", [])
+
 
 @bot.event
 async def on_ready():
-    print(f"[READY] Logged in as {bot.user} (ID: {bot.user.id})")
+    print(f"[READY] Logged in as {bot.user} (ID: {bot.user.id})") # type: ignore
+    updated = False
+
     for guild in bot.guilds:
         gid = str(guild.id)
 
-        # Ensure the guild exists in the permissions dict
-        if gid not in permissions:
-            permissions[gid] = {"organizers": [], "users": []}
+        # Only update if something was actually added
+        before = json.dumps(permissions.get(gid, {}), sort_keys=True)
+
+        ensure_permissions_structure(gid)
 
         invites = []
         inviter = None
@@ -553,71 +810,131 @@ async def on_ready():
         except discord.Forbidden:
             print(f"[ERROR] Could not fetch invites for {guild.name}")
 
-        # 🔒 ONLY reference uid inside this block
         if inviter:
             uid = str(inviter.id)
             if uid not in permissions[gid]["organizers"]:
                 permissions[gid]["organizers"].append(uid)
                 print(f"[INFO] Added {inviter} as organizer for {guild.name}")
 
-    # Optional: save the updated permissions if needed
-    with open(PERMISSIONS_FILE, "w") as f:
-        json.dump(permissions, f)
+        # Check if changes occurred
+        after = json.dumps(permissions.get(gid, {}), sort_keys=True)
+        if before != after:
+            updated = True
+
+    # Only save if something changed
+    if updated:
+        try:
+            import traceback
+            print("[DEBUG] Writing to permissions.json from on_ready()")
+            traceback.print_stack()
+
+            with open(PERMISSIONS_FILE, "w") as f:
+                json.dump(permissions, f, indent=4)
+            print("[DEBUG] Permissions saved after bot ready.")
+        except Exception as e:
+            print(f"[ERROR] Failed to save permissions: {e}")
+    else:
+        print("[DEBUG] No changes to permissions. Skipping write.")
 
 
 @bot.command(name="user")
 async def add_user_permission(ctx, member: discord.Member):
-    if not is_organizer(ctx.guild.id, ctx.author.id):
+    gid = str(ctx.guild.id)
+    uid = str(ctx.author.id)
+    target_uid = str(member.id)
+
+    if not is_organizer(gid, uid) and not is_administrator(gid, uid):
         await ctx.send("You do not have permission to assign roles.")
         return
 
-    uid = str(member.id)
-    gid = str(ctx.guild.id)
-
+    # === Safely ensure all roles exist ===
     if gid not in permissions:
-        permissions[gid] = {"organizers": [], "users": []}
+        permissions[gid] = {
+            "administrators": [],
+            "organizers": [],
+            "users": []
+        }
+    else:
+        for key in ["administrators", "organizers", "users"]:
+            if key not in permissions[gid]:
+                permissions[gid][key] = []
 
-    if uid not in permissions[gid]["users"]:
-        permissions[gid]["users"].append(uid)
+    if target_uid not in permissions[gid]["users"]:
+        permissions[gid]["users"].append(target_uid)
         with open(PERMISSIONS_FILE, "w") as f:
-            json.dump(permissions, f)
+            json.dump(permissions, f, indent=4)
 
     await ctx.send(f"✅ User `{member.display_name}` granted user permissions.")
 
-
 @bot.command(name="organizer")
 async def add_organizer_permission(ctx, member: discord.Member):
-    if not is_organizer(ctx.guild.id, ctx.author.id):
+    gid = str(ctx.guild.id)
+    uid = str(ctx.author.id)
+    target_uid = str(member.id)
+
+    # ✅ Allow both organizers and admins to assign organizer role
+    if not is_organizer(gid, uid) and not is_administrator(gid, uid):
         await ctx.send("You do not have permission to assign organizer roles.")
         return
 
-    uid = str(member.id)
-    gid = str(ctx.guild.id)
-
+    # ✅ Safely ensure permissions structure
     if gid not in permissions:
-        permissions[gid] = {"organizers": [], "users": []}
+        permissions[gid] = {
+            "administrators": [],
+            "organizers": [],
+            "users": []
+        }
+    else:
+        for key in ["administrators", "organizers", "users"]:
+            if key not in permissions[gid]:
+                permissions[gid][key] = []
 
-    if uid not in permissions[gid]["organizers"]:
-        permissions[gid]["organizers"].append(uid)
+    # ✅ Add the user if they’re not already an organizer
+    if target_uid not in permissions[gid]["organizers"]:
+        permissions[gid]["organizers"].append(target_uid)
         with open(PERMISSIONS_FILE, "w") as f:
-            json.dump(permissions, f)
+            json.dump(permissions, f, indent=4)
 
     await ctx.send(f"👑 User `{member.display_name}` granted organizer permissions.")
 
+@bot.command(name="administrator")
+async def add_administrator_permission(ctx, member: discord.Member):
+    gid = str(ctx.guild.id)
+    uid = str(ctx.author.id)
+    target_uid = str(member.id)
+
+    # ✅ Allow both organizers and admins to assign organizer role
+    if not is_organizer(gid, uid) and not is_administrator(gid, uid):
+        await ctx.send("You do not have permission to assign organizer roles.")
+        return
+
+    # ✅ Safely ensure permissions structure
+    if gid not in permissions:
+        permissions[gid] = {
+            "administrators": [],
+            "organizers": [],
+            "users": []
+        }
+    else:
+        for key in ["administrators", "organizers", "users"]:
+            if key not in permissions[gid]:
+                permissions[gid][key] = []
+
+    # ✅ Add the user if they’re not already an Admin
+    if target_uid not in permissions[gid]["administrators"]:
+        permissions[gid]["administrators"].append(target_uid)
+        with open(PERMISSIONS_FILE, "w") as f:
+            json.dump(permissions, f, indent=4)
+
+    await ctx.send(f"🤖 User `{member.display_name}` granted administrator permissions.")
+
+
 @bot.command(name="whoami")
 async def who_am_i(ctx):
-    uid = str(ctx.author.id)
     gid = str(ctx.guild.id)
-
-    role = "No permissions"
-    if gid in permissions:
-        if uid in permissions[gid]["organizers"]:
-            role = "Organizer"
-        elif uid in permissions[gid]["users"]:
-            role = "User"
-
-    await ctx.send(f"You are: {role}")
-
+    uid = str(ctx.author.id)
+    role = get_permission_level(gid, uid)
+    await ctx.send(f"You are: **{role}**")
 
 
 @bot.command(name="countdown")
@@ -652,40 +969,38 @@ async def countdown(ctx, threshold: int = 3):
 async def lphelp_command(ctx):
     help_text = (
         "**🎵 Playlist Management**\n"
-        "`!playlist add <name> to <#channel>` – Create & assign playlist to a channel\n"
-        "`!link` – Get the Spotify link for the current channel\n"
-        "`!reset` – Reset the playlist mapping for this channel\n\n"
-        
+        "`!playlist add <name> to <channel>` - Create & assign playlist to channel (admins only)\n"
+        "`!link` - Get Spotify link for current channel\n"
+        "`!reset` - Reset playlist mapping for this channel (admins only)\n\n"
         "**➕ Adding Songs**\n"
         "`!add <song> - <artist>`\n"
         "`!add <song> - <artist> - <album>`\n"
-        "`!add <Spotify link>` – Add directly by Spotify URL\n\n"
-        
+        "`!add <Spotify link>`\n\n"
         "**🚫 Removing Songs**\n"
-        "`!remove <song title>` – Remove your own submission\n\n"
-        
+        "`!remove <song title>` - Remove your submission\n\n"
         "**📊 Playlist Info & Limits**\n"
-        "`!status` – Check playlist size & your submissions\n"
-        "`!quota <#>` – Set user submission limit *(organizers only)*\n"
-        "`!limit <#>` – Set track length limit in minutes *(organizers only)*\n"
-        "`!quota` / `!limit` – View current limits\n\n"
-        
+        "`!status` - Playlist size and your submissions\n"
+        "`!quota <#>` - Set submission quota (organizers only)\n"
+        "`!limit <#>` - Set track duration limit in minutes (organizers only)\n"
+        "`!quota` / `!limit` - View current limits\n\n"
         "**📈 Leaderboard**\n"
-        "`!leaderboard` – View top contributors\n\n"
-        
-        "**🖼️ Playlist Art**\n"
-        "`!art <prompt>` – Generate AI art for the playlist\n"
-        "`!refreshart` – Manually re-apply latest art to playlist\n\n"
-        
+        "`!leaderboard` - See top contributors\n\n"
         "**🕵️ Permissions**\n"
-        "`!user @name` – Grant user permission\n"
-        "`!organizer @name` – Grant organizer permission\n"
-        "`!whoami` – Check your permission level\n\n"
-        
+        "`!user @name` - Grant user (organizers only)\n"
+        "`!organizer @name` - Grant organizer (admins only)\n"
+        "`!administrator @name` - Grant admin (admins only)\n"
+        "`!whoami` - Check your permission level\n\n"
+        "**🎨 Art Settings**\n"
+        "`!art on/off` - Enable or disable art (admins only)\n"
+        "`!artchannel <channel>` - Set art image post channel (admins only)\n"
+        "`!refreshart` - Refresh playlist artwork (organizers only if art is enabled)\n\n"
         "**⏱️ Countdown Mode**\n"
-        "`!countdown [#]` – Start a group vote to play the playlist"
+        "`!countdown [reactions_needed]` - Start group countdown to play"
     )
     await ctx.send(help_text)
 
+print("[BEFORE RUN] Permissions content:")
+print(json.dumps(permissions, indent=2))
 
-bot.run(DISCORD_TOKEN)
+
+bot.run(DISCORD_TOKEN) # type: ignore
