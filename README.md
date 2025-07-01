@@ -37,27 +37,27 @@ Built for music nerds. Powered by Python + Spotify + Discord.
 - !art <on/off>                                                    #enable channel artwork
 - !refreshart`                                                     #geneates new playlist art
 
-##  Permissions Overview
+| Command / Feature                         | Admin | Organizer |      User      |
+| ----------------------------------------- | :---: | :-------: | :------------: |
+| `!add <song>`                             |   ✅   |     ✅     |        ✅       |
+| `!remove <song>`                          |   ✅   |     ✅     | ✅ *(own only)* |
+| `!playlist add <name> to <#channel>`      |   ✅   |     ❌     |        ❌       |
+| `!quota <#>` *(set user submission cap)*  |   ✅   |     ✅     |        ❌       |
+| `!limit <#>` *(set track duration limit)* |   ✅   |     ✅     |        ❌       |
+| `!quota` *(view current cap)*             |   ✅   |     ✅     |        ❌       |
+| `!limit` *(view duration limit)*          |   ✅   |     ✅     |        ❌       |
+| `!status` *(view your submissions)*       |   ✅   |     ✅     |        ✅       |
+| `!link` *(get playlist link)*             |   ✅   |     ✅     |        ✅       |
+| `!leaderboard` *(top submitters)*         |   ✅   |     ✅     |        ✅       |
+| `!countdown [#]` *(reaction-based start)* |   ✅   |     ✅     |        ❌       |
+| `!user @mention` *(grant user role)*      |   ✅   |     ❌     |        ❌       |
+| `!organizer @mention` *(grant organizer)* |   ✅   |     ❌     |        ❌       |
+| `!whoami` *(check your role)*             |   ✅   |     ✅     |        ✅       |
+| `!lphelp` *(view all commands)*           |   ✅   |     ✅     |        ✅       |
+| `!art <on/off>` *(enable/disable art)*    |   ✅   |     ❌     |        ❌       |
+| `!refreshart [optional prompt]`           |   ✅   |     ✅     |        ❌       |
+| `!promt` *(generate art prompt)*          |   ✅   |     ✅     |        ✅       |
 
-| Command / Feature                          | Organizer     | User       |
-|--------------------------------------------|---------------|------------|
-| `!add <song>`                              | ✅            | ✅        |
-| `!remove <song>`                           | ✅            | ✅ *(own only)* |
-| `!playlist add <name> to <#channel>`       | ✅            | ❌        |
-| `!quota <#>` *(set user submission cap)*   | ✅            | ❌        |
-| `!limit <#>` *(set track duration limit)*  | ✅            | ❌        |
-| `!quota` *(view current cap)*              | ✅            | ✅        |
-| `!limit` *(view duration limit)*           | ✅            | ✅        |
-| `!status` *(view your submissions)*        | ✅            | ✅        |
-| `!link` *(get playlist link)*              | ✅            | ✅        |
-| `!leaderboard` *(top submitters)*          | ✅            | ✅        |
-| `!countdown [#]` *(reaction-based start)*  | ✅            | ✅        |
-| `!user @mention` *(grant user role)*       | ✅            | ❌        |
-| `!organizer @mention` *(grant organizer)*  | ✅            | ❌        |
-| `!whoami` *(check your role)*              | ✅            | ✅        |
-| `!lphelp` *(view all commands)*            | ✅            | ✅        |
-| `!art <on/off>`                            | ✅            | ❌        |
-| `!refreshart`                              | ✅            | ❌        |
 
 If you liked this project, consider buying me a coffee
 https://coff.ee/agreatsquirrel
