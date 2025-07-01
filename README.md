@@ -12,7 +12,7 @@ Built for music nerds. Powered by Python + Spotify + Discord.
 - Per-channel quotas & song length limits
 - Album art previews
 - Countdown start with emoji reactions
-- User/Organizer permissions
+- User/Organizer/Admin permissions
 - Leaderboards, status reports, and more!
 - Custom AI generated artwork for playlists
 
