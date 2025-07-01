@@ -22,7 +22,7 @@ Built for music nerds. Powered by Python + Spotify + Discord.
 - !playlist add Group-Playlist to Music                            #Adds a playlist called 'Group-Playlist to the Music Channel of a discord server 
 - !add For Whom the Bell Tolls - Metallica                         #Adds a song to the channels playlist by Song Name - Band Name
 - !add For Whom the Bell Tolls - Metallica - Ride the Lightning    #Adds a song to the channels playlist by Song Name - Band Name - Album Name
-- !add <spotify track URL>                                         #Adds a song to the channels playlist by Spotify URL
+- !add `<spotify track URL>`                                         #Adds a song to the channels playlist by Spotify URL
 - !remove For Whom the Bell Tolls                                  #Removes song from the channels playlist
 - !link                                                            #Retreives a link to the channels playlist
 - !countdown 3                                                     #Starts a countdown which requires a specific number of users to react to, to initiate
