@@ -994,6 +994,7 @@ async def lphelp_command(ctx):
         "`!art on/off` - Enable or disable art (admins only)\n"
         "`!artchannel <channel>` - Set art image post channel (admins only)\n"
         "`!refreshart` - Refresh playlist artwork (organizers only if art is enabled)\n\n"
+        "`!prompt` - Generaties playlist art prompt\n\n"
         "**⏱️ Countdown Mode**\n"
         "`!countdown [reactions_needed]` - Start group countdown to play"
     )
