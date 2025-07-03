@@ -11,8 +11,11 @@ import requests
 import base64
 import certifi
 import logging
+import aiohttp
 from PIL import Image
 from io import BytesIO
+from datetime import datetime
+import re
 
 logging.getLogger('discord').setLevel(logging.WARNING)
 
@@ -262,7 +265,7 @@ async def on_message(message):
     await bot.process_commands(message)
 
 
-@bot.command(name="add")
+@bot.command(name="add", aliases=["a"])
 async def add_to_playlist(ctx, *, song_query: str):
     try:
         gid = str(ctx.guild.id)
@@ -356,7 +359,7 @@ async def add_to_playlist(ctx, *, song_query: str):
         await ctx.send(f"Error: {str(e)}")
 
 
-@bot.command(name="link")
+@bot.command(name="link", aliases=["lk"])
 async def playlist_link(ctx):
     try:
         channel_name = ctx.channel.name
@@ -372,7 +375,7 @@ async def playlist_link(ctx):
         print(f"[ERROR] {e}")
         await ctx.send(f"Error: {str(e)}")
 
-@bot.command(name="playlist")
+@bot.command(name="playlist", aliases=["p"])
 async def create_playlist(ctx, action: str, *, args: str):
     try:
         if action.lower() != "add" or " to " not in args:
@@ -409,7 +412,7 @@ async def create_playlist(ctx, action: str, *, args: str):
 
 @bot.command(name="art")
 async def toggle_art(ctx, setting: str):
-    if not is_organizer(ctx.guild.id, ctx.author.id):
+    if not is_administrator(ctx.guild.id, ctx.author.id):
         await ctx.send("❌ You do not have permission to toggle art settings.")
         return
 
@@ -432,12 +435,12 @@ async def toggle_art(ctx, setting: str):
         json.dump(art_settings, f)
 
 
-@bot.command(name="refreshart")
+@bot.command(name="refreshart", aliases=["ra"])
 async def refresh_art(ctx, *, custom_prompt: str = None): # type: ignore
     gid = str(ctx.guild.id)
     cid = str(ctx.channel.id)
 
-    if not is_organizer(gid, ctx.author.id):
+    if not is_administrator(gid, ctx.author.id):
         await ctx.send("🚫 You do not have permission to refresh playlist art.")
         return
 
@@ -456,6 +459,39 @@ async def refresh_art(ctx, *, custom_prompt: str = None): # type: ignore
 
         image_url = generate_dalle_image(prompt)
         print(f"[DEBUG] Downloaded image from: {image_url}")
+            
+        # Clean up prompt to make it safe for filenames
+        def sanitize_filename(text):
+            return re.sub(r'[^a-zA-Z0-9_-]', '_', text)
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+        safe_prompt = sanitize_filename(prompt)
+
+        # Get human-readable folder names
+        guild_name = sanitize_filename(ctx.guild.name)
+        channel_name = sanitize_filename(ctx.channel.name)
+
+        folder_name = f"{guild_name}_{channel_name}"
+        local_dir = os.path.join("playlist_art", folder_name)
+        os.makedirs(local_dir, exist_ok=True)
+
+        local_filename = os.path.join(local_dir, f"{safe_prompt}_{timestamp}.png")
+
+        # Download the image
+        async with aiohttp.ClientSession() as session:
+            async with session.get(image_url) as resp:
+                if resp.status == 200:
+                    with open(local_filename, 'wb') as f:
+                        f.write(await resp.read())
+                    print(f"[INFO] Image saved to {local_filename}")
+                else:
+                    raise Exception(f"Failed to download image: {resp.status}")
+
+
+        # Reupload to Discord for embedding
+        file = discord.File(local_filename, filename="playlist_art.png")
+        embed = discord.Embed(title="🖼️ New Playlist Art", description=f"Prompt: `{prompt}`")
+        embed.set_image(url="attachment://playlist_art.png")
 
         upload_playlist_cover(playlist_id, image_url)
         print(f"[INFO] Playlist cover updated successfully.")
@@ -469,8 +505,8 @@ async def refresh_art(ctx, *, custom_prompt: str = None): # type: ignore
             art_channel = bot.get_channel(int(art_channel_id))
             if art_channel:
                 embed = discord.Embed(title="🖼️ New Playlist Art", description=f"Prompt: `{prompt}`")
-                embed.set_image(url=image_url)
-                await art_channel.send(embed=embed) # type: ignore
+                # embed.set_image(url=image_url)
+                await art_channel.send(file=file, embed=embed) # type: ignore
             else:
                 print(f"[WARN] Art channel not found: {art_channel_id}")
 
@@ -531,7 +567,7 @@ async def set_art_channel(ctx, *, channel_name: str):
     await ctx.send(f"✅ Playlist art will now be posted in #{art_channel.name}")
 
 
-@bot.command(name="status")
+@bot.command(name="status", aliases=["s"])
 async def status(ctx):
     try:
         gid = str(ctx.guild.id)
@@ -571,7 +607,7 @@ async def status(ctx):
 
 
 
-@bot.command(name="quota")
+@bot.command(name="quota", aliases=["q"])
 async def set_quota(ctx, quota: int = None): # type: ignore
     gid = str(ctx.guild.id)
     cid = str(ctx.channel.id)
@@ -601,7 +637,7 @@ async def set_quota(ctx, quota: int = None): # type: ignore
     await ctx.send(f"✅ Quota set to `{quota}` track(s) per user for this playlist.")
 
 
-@bot.command(name="limit")
+@bot.command(name="limit", aliases=["l"])
 async def set_limit(ctx, minutes: int = None): # type: ignore
     gid = str(ctx.guild.id)
     cid = str(ctx.channel.id)
@@ -677,7 +713,7 @@ async def reset_playlist(ctx):
         await ctx.send(f"Error: {str(e)}")
 
 
-@bot.command(name="remove")
+@bot.command(name="remove", aliases=["r"])
 async def remove_track(ctx, *, query: str):
     try:
         gid = str(ctx.guild.id)
@@ -994,7 +1030,6 @@ async def lphelp_command(ctx):
         "`!art on/off` - Enable or disable art (admins only)\n"
         "`!artchannel <channel>` - Set art image post channel (admins only)\n"
         "`!refreshart` - Refresh playlist artwork (organizers only if art is enabled)\n\n"
-        "`!prompt` - Generaties playlist art prompt\n\n"
         "**⏱️ Countdown Mode**\n"
         "`!countdown [reactions_needed]` - Start group countdown to play"
     )
