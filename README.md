@@ -57,6 +57,8 @@ Built for music nerds. Powered by Python + Spotify + Discord.
 | `!art <on/off>` *(enable/disable art)*    |   ✅   |     ❌     |        ❌       |
 | `!refreshart [optional prompt]`           |   ✅   |     ✅     |        ❌       |
 | `!promt` *(generate art prompt)*          |   ✅   |     ✅     |        ✅       |
+| `!poll` *(generate user polls  )*         |   ✅   |     ✅     |        ❌       |
+| `!wheel` *(random user selection)*        |   ✅   |     ✅     |        ❌       |
 
 
 If you liked this project, consider buying me a coffee
