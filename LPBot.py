@@ -1,5 +1,5 @@
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
 import os
@@ -14,7 +14,7 @@ import logging
 import aiohttp
 from PIL import Image
 from io import BytesIO
-from datetime import datetime
+from datetime import datetime, timedelta
 import re
 
 logging.getLogger('discord').setLevel(logging.WARNING)
@@ -61,7 +61,8 @@ if os.path.exists(PERMISSIONS_FILE):
 else:
     print("[INFO] No permissions file found, starting fresh.")
 
-
+active_polls = {}  # key = poll name
+locks = {}  # {message_id: asyncio.Lock()}
 
 
 # === CONFIG ===
@@ -75,6 +76,8 @@ ART_SETTING_FILE = "art_setting.json"
 # === INTENTS ===
 intents = discord.Intents.default()
 intents.message_content = True
+intents.presences = True
+intents.members = True
 
 # === BOT CONFIG ===
 bot = commands.Bot(command_prefix="!", intents=intents)
@@ -258,22 +261,112 @@ def upload_playlist_cover(playlist_id, image_url):
     except Exception as e:
         print(f"[ERROR] Failed to upload playlist cover: {e}")
 
+def get_all_playlist_tracks(sp, playlist_id):
+    all_tracks = []
+    offset = 0
+    limit = 100
+
+    while True:
+        response = sp.playlist_items(playlist_id, offset=offset, limit=limit)
+        items = response.get("items", [])
+        if not items:
+            break
+        all_tracks.extend(items)
+        offset += len(items)
+
+    return all_tracks
+
 
 @bot.event
 async def on_message(message):
-    #print(f"[DEBUG] Received message from {message.author}: {message.content}")
+    if message.author.bot:
+        return
+
+    # Poll reply logic
+    if message.reference and message.reference.message_id:
+        for poll_key, poll in active_polls.items():
+            if poll["status"] == "collecting" and message.reference.message_id == poll["message_id"]:
+                user_id = str(message.author.id)
+
+                # Make sure this is a reply to THIS poll only
+                if str(message.channel.id) != poll["channel_id"]:
+                    continue
+
+                # Initialize user's submission list
+                if user_id not in poll["submissions"]:
+                    poll["submissions"][user_id] = []
+
+                if len(poll["submissions"][user_id]) >= poll["submission_limit"]:
+                    await message.channel.send("⚠️ You've reached your submission limit for this poll.", delete_after=5)
+                else:
+                    poll["submissions"][user_id].append(message.content)
+                    print(f"[POLL] {message.author} submitted to '{poll_key}': {message.content}")
+                break  # stop once matched correctly
+
+        # Debug embed structure if replying to an fmbot message
+        try:
+            replied_msg = await message.channel.fetch_message(message.reference.message_id)
+            if replied_msg.embeds:
+                embed = replied_msg.embeds[0]
+                print("[DEBUG] FMbot Embed JSON:", embed.to_dict())
+        except Exception as e:
+            print(f"[ERROR] Failed to fetch replied message or embed: {e}")
+
     await bot.process_commands(message)
+
+@bot.event
+async def on_reaction_add(reaction, user):
+    if user.bot: return
+
+    msg_id = reaction.message.id
+    poll = next((p for p in active_polls.values() if p.get("vote_message_id") == msg_id and p["status"] == "voting"), None)
+    if not poll or poll.get("vote_limit") is None:
+        return
+
+    # Create/init lock
+    if msg_id not in locks:
+        locks[msg_id] = asyncio.Lock()
+
+    async with locks[msg_id]:
+        votes = user_votes.setdefault(msg_id, {}).setdefault(user.id, [])
+        if poll["vote_limit"] == 1:
+            # Remove all previous votes atomically
+            for e in votes:
+                try:
+                    await reaction.message.remove_reaction(e, user)
+                except:
+                    pass
+            votes.clear()
+            votes.append(reaction.emoji)
+        else:
+            if reaction.emoji in votes:
+                return
+            if len(votes) >= poll["vote_limit"]:
+                try:
+                    await reaction.message.remove_reaction(reaction.emoji, user)
+                except:
+                    pass
+            else:
+                votes.append(reaction.emoji)
+
+@bot.event
+async def on_reaction_remove(reaction, user):
+    message_id = reaction.message.id
+    if message_id in user_votes and user.id in user_votes[message_id]:
+        if reaction.emoji in user_votes[message_id][user.id]:
+            user_votes[message_id][user.id].remove(reaction.emoji)
 
 
 @bot.command(name="add", aliases=["a"])
-async def add_to_playlist(ctx, *, song_query: str):
+async def add_to_playlist(ctx, *, song_query: str = None): # type: ignore
     try:
         gid = str(ctx.guild.id)
         cid = str(ctx.channel.id)
         user_id = str(ctx.author.id)
 
         channel_name = ctx.channel.name
-        playlist_id = playlist_map.get(channel_name)
+        playlist_id = playlist_map.get(str(ctx.channel.id))
+        # playlist_id = playlist_map.get(channel_name)
 
         if not playlist_id:
             await ctx.send("No playlist linked to this channel.")
@@ -293,6 +386,36 @@ async def add_to_playlist(ctx, *, song_query: str):
 
         if len(user_tracks) >= user_quota:
             await ctx.send(f"{ctx.author.mention}, you've hit your submission limit of {user_quota}.")
+            return
+
+        # === Try FMbot reply parsing first ===
+        if not song_query and ctx.message.reference:
+            try:
+                replied_msg = await ctx.channel.fetch_message(ctx.message.reference.message_id)
+                if replied_msg.embeds:
+                    embed = replied_msg.embeds[0]
+                    desc = embed.description or ""
+
+                    track_match = re.search(r"\[([^\]]+)\]\(", desc)
+                    artist_match = re.search(r"\*\*(.*?)\*\*", desc)
+                    if track_match and artist_match:
+                        title = track_match.group(1).strip()
+                        artist = artist_match.group(1).strip()
+                        song_query = f"{title} - {artist}"
+                        print(f"[DEBUG] Pulled from fmbot reply: {song_query}")
+            except Exception as e:
+                print(f"[ERROR] Failed to parse fmbot reply: {e}")
+
+        # === Try Spotify presence as a fallback ===
+        if not song_query:
+            print(f"[DEBUG] Activities: {ctx.author.activities}")
+            activity = discord.utils.find(lambda a: isinstance(a, discord.Spotify), ctx.author.activities)
+            if activity:
+                song_query = f"{activity.title} - {activity.artist}"
+                print(f"[DEBUG] Using Spotify presence: {song_query}")
+
+        if not song_query:
+            await ctx.send("❌ No song info found. Provide a search query, reply to a .fmbot message, or make sure you're visible on Spotify.")
             return
 
         # === Track Lookup ===
@@ -320,18 +443,12 @@ async def add_to_playlist(ctx, *, song_query: str):
         # === Duration Limit ===
         duration = track['duration_ms'] # type: ignore
 
-        # Grab the duration limit for this guild/channel, or fall back to default
-        print(f"[DEBUG] Guild ID: {gid}, Channel ID: {cid}")
-        print(f"[DEBUG] Duration limits raw: {duration_limits}")
-        print(f"[DEBUG] Duration for this channel: {duration_limits.get(gid, {}).get(cid)}")
-
         limit_minutes = duration_limits.get(gid, {}).get(cid, MAX_DURATION_MS // 60000)
         track_limit = limit_minutes * 60000
 
         if duration > track_limit:
             await ctx.send(f"Track too long (limit is {limit_minutes} minutes).")
             return
-
 
         # === Check for duplicates ===
         all_submitted = [tid for u in user_submissions[gid][playlist_id].values() for tid in u]
@@ -358,12 +475,11 @@ async def add_to_playlist(ctx, *, song_query: str):
         print(f"[ERROR] {e}")
         await ctx.send(f"Error: {str(e)}")
 
-
 @bot.command(name="link", aliases=["lk"])
 async def playlist_link(ctx):
     try:
         channel_name = ctx.channel.name
-        playlist_id = playlist_map.get(channel_name)
+        playlist_id = playlist_map.get(str(ctx.channel.id))
         if not playlist_id:
             await ctx.send("No playlist linked to this channel.")
             return
@@ -448,7 +564,7 @@ async def refresh_art(ctx, *, custom_prompt: str = None): # type: ignore
         await ctx.send("🎨 Art is not enabled for this channel.")
         return
 
-    playlist_id = playlist_map.get(ctx.channel.name)
+    playlist_id = playlist_map.get(str(ctx.channel.id))
     if not playlist_id:
         await ctx.send("⚠️ No playlist is linked to this channel.")
         return
@@ -572,13 +688,14 @@ async def status(ctx):
     try:
         gid = str(ctx.guild.id)
         channel_name = ctx.channel.name
-        playlist_id = playlist_map.get(channel_name)
+        playlist_id = playlist_map.get(str(ctx.channel.id))
+
 
         if not playlist_id:
             await ctx.send("No playlist linked to this channel.")
             return
 
-        playlist_items = sp.playlist_items(playlist_id, limit=100)["items"] # type: ignore
+        playlist_items = sp.playlist_items(playlist_id, limit=100)["items"]  # type: ignore
         submission_data = user_submissions.get(gid, {}).get(playlist_id, {})
 
         status_lines = []
@@ -590,21 +707,23 @@ async def status(ctx):
             # Find who submitted the track
             for user_id, tracks in submission_data.items():
                 if track_id in tracks:
-                    member = ctx.guild.get_member(int(user_id))
-                    user_name = member.display_name if member else f"<@{user_id}>"
+                    try:
+                        member = await ctx.guild.fetch_member(int(user_id))
+                        user_name = member.display_name
+                    except:
+                        user_name = f"👻 Unknown User"
                     break
 
-            status_lines.append(f"{track['name']} by {track['artists'][0]['name']} - Submitted by {user_name}")
+            status_lines.append(f"{track['name']} by {track['artists'][0]['name']} — submitted by {user_name}")
 
         if status_lines:
-            await ctx.send("**Playlist Submissions:**\n" + "\n".join(status_lines))
+            await ctx.send("**📄 Playlist Submissions:**\n" + "\n".join(status_lines))
         else:
-            await ctx.send("No tracks found in the playlist.")
+            await ctx.send("📭 No tracks found in the playlist.")
 
     except Exception as e:
         print(f"[ERROR] {e}")
         await ctx.send(f"Error: {str(e)}")
-
 
 
 @bot.command(name="quota", aliases=["q"])
@@ -671,7 +790,7 @@ async def reset_playlist(ctx):
     try:
         gid = str(ctx.guild.id)
         channel_name = ctx.channel.name
-        playlist_id = playlist_map.get(channel_name)
+        playlist_id = playlist_map.get(str(ctx.channel.id))
 
         if not playlist_id:
             await ctx.send("No playlist linked to this channel.")
@@ -721,7 +840,7 @@ async def remove_track(ctx, *, query: str):
         user_id = str(ctx.author.id)
 
         channel_name = ctx.channel.name
-        playlist_id = playlist_map.get(channel_name)
+        playlist_id = playlist_map.get(str(ctx.channel.id))
 
         if not playlist_id:
             await ctx.send("No playlist linked to this channel.")
@@ -729,7 +848,7 @@ async def remove_track(ctx, *, query: str):
 
         # New structure check
 
-        playlist_items = sp.playlist_items(playlist_id, limit=100)["items"] # type: ignore
+        playlist_items = get_all_playlist_tracks(sp, playlist_id) # type: ignore
         # print(f"[DEBUG] Guild ID: {gid}")
         # print(f"[DEBUG] Playlist ID: {playlist_id}")
         # print(f"[DEBUG] User ID: {user_id}")
@@ -774,14 +893,12 @@ async def remove_track(ctx, *, query: str):
         print(f"[ERROR] {e}")
         await ctx.send(f"Error: {str(e)}")
 
-
-
 @bot.command(name="leaderboard")
 async def leaderboard(ctx):
     try:
         gid = str(ctx.guild.id)
         channel_name = ctx.channel.name
-        playlist_id = playlist_map.get(channel_name)
+        playlist_id = playlist_map.get(str(ctx.channel.id))
 
         if not playlist_id:
             await ctx.send("No playlist linked to this channel.")
@@ -793,10 +910,14 @@ async def leaderboard(ctx):
             return
 
         leaderboard_data = []
+
         for user_id, tracks in submission_data.items():
             count = len(tracks)
-            member = ctx.guild.get_member(int(user_id))
-            name = member.display_name if member else f"<@{user_id}>"
+            try:
+                member = await ctx.guild.fetch_member(int(user_id))
+                name = member.display_name
+            except:
+                name = f"👻 Unknown User"
             leaderboard_data.append((name, count))
 
         # Sort descending by count
@@ -838,19 +959,6 @@ async def on_ready():
 
         invites = []
         inviter = None
-
-        try:
-            invites = await guild.invites()
-            if invites:
-                inviter = invites[0].inviter
-        except discord.Forbidden:
-            print(f"[ERROR] Could not fetch invites for {guild.name}")
-
-        if inviter:
-            uid = str(inviter.id)
-            if uid not in permissions[gid]["organizers"]:
-                permissions[gid]["organizers"].append(uid)
-                print(f"[INFO] Added {inviter} as organizer for {guild.name}")
 
         # Check if changes occurred
         after = json.dumps(permissions.get(gid, {}), sort_keys=True)
@@ -1001,6 +1109,236 @@ async def countdown(ctx, threshold: int = 3):
     except asyncio.TimeoutError:
         await ctx.send("Countdown cancelled. Not enough reactions in time.")
 
+@bot.command(name="wheel")
+async def start_wheel(ctx, seconds: int = 60):
+    gid = str(ctx.guild.id)
+    uid = str(ctx.author.id)
+
+    if not (is_organizer(gid, uid) or is_administrator(gid, uid)):
+        await ctx.send("🚫 You do not have permission to start the wheel.")
+        return
+
+    if seconds < 30:
+        await ctx.send("⏳ Timer must be at least 30 seconds to give people a chance.")
+        return
+    
+    if seconds > 180:
+        await ctx.send("🕒 Max wheel time is 180 seconds. Chill.")
+        return
+
+    message = await ctx.send(f"🎧 **Opt-in for Wheel has begun!**\nHit 🎧 to be considered. Winner will be randomly selected in **{seconds} seconds**.")
+    await message.add_reaction("🎧")
+
+    await asyncio.sleep(seconds)
+
+    # Fetch updated message with reactions
+    message = await ctx.channel.fetch_message(message.id)
+    reaction = discord.utils.get(message.reactions, emoji="🎧")
+
+    if not reaction:
+        await ctx.send("⚠️ No one reacted in time.")
+        return
+
+    users = [user async for user in reaction.users()]
+    users = [user for user in users if not user.bot]
+
+    if not users:
+        await ctx.send("⚠️ Nobody opted in! Spin canceled.")
+        return
+
+    winner = random.choice(users)
+    await ctx.send(f"🎉 **{winner.mention} has been chosen by the Wheel of Fate!**")
+
+
+poll_votes = {}  # message_id: {emoji: count}
+user_votes = {} # message_id: {user_id: [emoji1, emoji2]}
+
+
+def parse_duration(raw):
+    if isinstance(raw, int):
+        return raw
+    match = re.match(r"(\d+)([mhd])", raw.lower())
+    if not match:
+        return int(raw)
+    num, unit = int(match[1]), match[2]
+    if unit == 'm':
+        return num
+    elif unit == 'h':
+        return num * 60
+    elif unit == 'd':
+        return num * 1440
+    return num
+
+@bot.command(name="poll")
+async def poll_command(ctx, *args):
+    try:
+        if len(args) == 0:
+            await ctx.send("❌ You must provide a poll name.")
+            return
+
+        # Check for 'start' or 'stop' as the last argument
+        if len(args) >= 2 and args[-1].lower() in ["start", "stop"]:
+            poll_name = " ".join(args[:-1])
+            action = args[-1].lower()
+            poll_key = poll_name.lower()
+
+            gid = str(ctx.guild.id)
+            uid = str(ctx.author.id)
+
+            if not (is_administrator(gid, uid) or is_organizer(gid, uid)):
+                await ctx.send("🚫 You do not have permission to manage this poll.")
+                return
+
+            if poll_key not in active_polls:
+                await ctx.send("⚠️ No active poll by that name.")
+                return
+
+            if action == "start":
+                await start_poll(ctx, poll_key)
+            elif action == "stop":
+                await end_poll(ctx, poll_key)
+            return
+
+        # Extract name and other args
+        name_parts = []
+        i = 0
+        while i < len(args) and not re.match(r"^\d+[mhd]?$", args[i]):
+            name_parts.append(args[i])
+            i += 1
+
+        poll_name = " ".join(name_parts)
+        poll_key = poll_name.lower()
+        rest = args[i:]
+
+        gid = str(ctx.guild.id)
+        cid = str(ctx.channel.id)
+        uid = str(ctx.author.id)
+
+        # Permission check
+        if not (is_administrator(gid, uid) or is_organizer(gid, uid)):
+            await ctx.send("🚫 You do not have permission to start a poll.")
+            return
+
+        # Parse optional args with time suffix support
+        submission_limit = int(rest[0]) if len(rest) >= 1 and rest[0].isdigit() else 1
+        start_delay = parse_duration(rest[1]) if len(rest) >= 2 else 5
+        vote_duration = parse_duration(rest[2]) if len(rest) >= 3 else 5
+        vote_limit = int(rest[3]) if len(rest) >= 4 and rest[3].isdigit() else None
+
+        if poll_key in active_polls:
+            await ctx.send("⚠️ A poll with that name already exists. Use `!poll <name> start` or `stop`.")
+            return
+
+        # Create poll data
+        now = datetime.utcnow()
+        message = await ctx.send(f"📝 **Poll '{poll_name}' is open for submissions!**\nReply to this message with your entry.\nYou can submit **{submission_limit}** item(s). Voting will begin in **{start_delay}** minutes.")
+
+        active_polls[poll_key] = {
+            "guild_id": gid,
+            "channel_id": cid,
+            "creator_id": uid,
+            "submission_limit": submission_limit,
+            "start_time": now + timedelta(minutes=start_delay),
+            "vote_duration": vote_duration,
+            "vote_limit": vote_limit,
+            "submissions": {},
+            "status": "collecting",
+            "message_id": message.id
+        }
+
+        # Schedule the vote to start automatically
+        await asyncio.sleep(start_delay * 60)
+        if active_polls.get(poll_key, {}).get("status") == "collecting":
+            await start_poll(ctx, poll_key)
+
+    except Exception as e:
+        print(f"[ERROR] Poll command failed: {e}")
+        await ctx.send(f"Error: {str(e)}")
+
+
+async def start_poll(ctx, poll_key):
+    poll = active_polls.get(poll_key)
+    if not poll:
+        return
+
+    if poll["status"] != "collecting":
+        await ctx.send("⚠️ Poll is already active or ended.")
+        return
+
+    poll["status"] = "voting"
+
+    submissions = []
+    for entries in poll["submissions"].values():
+        submissions.extend(entries)
+
+    if not submissions:
+        await ctx.send("⚠️ No submissions were received. Poll cancelled.")
+        active_polls.pop(poll_key, None)
+        return
+
+    channel = bot.get_channel(int(poll["channel_id"]))
+    message_lines = [f"🗳️ **Voting for '{poll_key}' has begun!** React to vote:"]
+
+    for i, entry in enumerate(submissions):
+        message_lines.append(f"{i+1}. {entry}")
+
+    vote_msg = await channel.send("\n".join(message_lines)) # type: ignore
+
+    # React with emojis
+    emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
+    for i in range(len(submissions)):
+        await vote_msg.add_reaction(emojis[i])
+
+    # Store the vote message ID to use later
+    poll["vote_message_id"] = vote_msg.id
+    poll["vote_emojis"] = emojis[:len(submissions)]
+    poll["entries"] = submissions
+
+    # Schedule poll end
+    await asyncio.sleep(poll["vote_duration"] * 60)
+    if poll_key in active_polls:
+        await end_poll(ctx, poll_key)
+
+
+async def end_poll(ctx, poll_key):
+    poll = active_polls.get(poll_key)
+    if not poll or poll["status"] != "voting":
+        await ctx.send("⚠️ Poll is not currently active.")
+        return
+
+    poll["status"] = "ended"
+
+    channel = bot.get_channel(int(poll["channel_id"]))
+    vote_msg = await channel.fetch_message(poll["vote_message_id"]) # type: ignore
+
+    vote_counts = {}
+    for reaction in vote_msg.reactions:
+        emoji = reaction.emoji
+        if emoji in poll["vote_emojis"]:
+            vote_counts[emoji] = reaction.count - 1  # Subtract bot's own reaction
+
+    max_votes = max(vote_counts.values(), default=0)
+    winners = [emoji for emoji, count in vote_counts.items() if count == max_votes and count > 0]
+
+    result_lines = ["🏁 **Poll Results:**"]
+    for emoji in poll["vote_emojis"]:
+        entry = poll["entries"][poll["vote_emojis"].index(emoji)]
+        count = vote_counts.get(emoji, 0)
+        result_lines.append(f"{emoji} {entry} — {count} vote{'s' if count != 1 else ''}")
+
+    if winners:
+        if len(winners) == 1:
+            winning_entry = poll["entries"][poll["vote_emojis"].index(winners[0])]
+            result_lines.append(f"\n🏆 **Winner:** {winning_entry} with {max_votes} vote{'s' if max_votes != 1 else ''}!")
+        else:
+            tied_entries = [poll["entries"][poll["vote_emojis"].index(e)] for e in winners]
+            result_lines.append(f"\n🤝 **Tie between:** {', '.join(tied_entries)} with {max_votes} votes each!")
+    else:
+        result_lines.append("\n❌ No votes were cast.")
+
+    await channel.send("\n".join(result_lines)) # type: ignore
+    active_polls.pop(poll_key, None)
+
 @bot.command(name="lphelp")
 async def lphelp_command(ctx):
     help_text = (
@@ -1009,6 +1347,8 @@ async def lphelp_command(ctx):
         "`!link` - Get Spotify link for current channel\n"
         "`!reset` - Reset playlist mapping for this channel (admins only)\n\n"
         "**➕ Adding Songs**\n"
+        "`!add` - add the now playing track from spotify (requires spotify integration and discord online status)\n"
+        "`!add <while replying to .fm bot command> - adds track based on fmbot results\n"
         "`!add <song> - <artist>`\n"
         "`!add <song> - <artist> - <album>`\n"
         "`!add <Spotify link>`\n\n"
@@ -1028,10 +1368,13 @@ async def lphelp_command(ctx):
         "`!whoami` - Check your permission level\n\n"
         "**🎨 Art Settings**\n"
         "`!art on/off` - Enable or disable art (admins only)\n"
+        "`!prompt` - Generate an AI art prompt"
         "`!artchannel <channel>` - Set art image post channel (admins only)\n"
         "`!refreshart` - Refresh playlist artwork (organizers only if art is enabled)\n\n"
-        "**⏱️ Countdown Mode**\n"
-        "`!countdown [reactions_needed]` - Start group countdown to play"
+        "**🎧 LP Tools**\n"
+        "`!countdown [reactions_needed]` - Start group countdown to play\n"
+        "`!wheel` [reactions_needed]` - Randomly select a wheel participant\n"
+        "`!poll <# of user selections> <# of minutes, hours, or day for poll open> <# of m,h.d, for vote> <# of votes> "
     )
     await ctx.send(help_text)
 
