@@ -14,6 +14,8 @@ Spotify Developer account
 
 Discord Developer Portal access
 
+OpenAI Developer Portal access
+
 🔧 Installation Steps
 
 1. Clone the Repository
@@ -32,12 +34,13 @@ pip install -r requirements.txt
 
 4. Set Up Environment Variables
 
-Create a .env file in the root folder with the following:
+Create a .env file in the root folder or set environment variables with the following:
 
 DISCORD_TOKEN=your_discord_bot_token
 SPOTIFY_CLIENT_ID=your_spotify_client_id
 SPOTIFY_CLIENT_SECRET=your_spotify_client_secret
-SPOTIFY_REDIRECT_URI=http://localhost:8888/callback
+SPOTIFY_REDIRECT_URI=http://127.0.0.1:8888/callback
+OPENAI_API_KEY=Your_OPENAI_API_Key
 
 🎮 Bot Setup
 
@@ -51,11 +54,13 @@ Enable Message Content Intent
 
 Create a Bot, copy the token, and add it to your .env
 
+Under Bot
+
+Select permissions: Send Messages, Read Message History, Manage Messages, Use Slash Commands, Add Reactions
+
 Under OAuth2 > URL Generator:
 
 Check bot and applications.commands
-
-Select permissions: Send Messages, Read Message History, Manage Messages, etc.
 
 Copy the generated URL and invite the bot to your server
 
@@ -65,9 +70,27 @@ Go to Spotify Developer Dashboard
 
 Create an App
 
-Add http://localhost:8888/callback as a redirect URI
+Add http://127.0.0.1:8888/callback as a redirect URI
 
 Use the Client ID and Secret in your .env
+
+3. Set up Open AI API
+
+###NOTE###
+OpenAI is free to sign up but its usage is not. Image generation costs roughly .04 - .08 cents an image. 
+
+Go to the OpenAI platform dashboard
+https://platform.openai.com/account/api-keys
+
+Log in (or create an account if you haven't already)
+
+Click "Create new secret key"
+
+It'll generate a key like sk-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+
+Copy it immediately — you won’t be able to see it again later
+
+Add it to your .env file (if you're using dotenv):
 
 ▶️ Run the Bot
 
@@ -90,6 +113,8 @@ permissions.json: Tracks roles per server
 submissions.json: Tracks user submissions
 
 playlist_map.json: Maps channels to playlists
+
+art_setting.json: Maps art to channel playlists
 
 quotas.json: Playlist quota per user
 
