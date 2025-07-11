@@ -61,16 +61,17 @@ if os.path.exists(PERMISSIONS_FILE):
 else:
     print("[INFO] No permissions file found, starting fresh.")
 
+#Poll settings to keep your bot from being rate limited by discord API
 active_polls = {}  # key = poll name
 locks = {}  # {message_id: asyncio.Lock()}
 
-
+#You can chose to use .env file or environment variables.
 # === CONFIG ===
-DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-SPOTIFY_CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID")
-SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
-SPOTIFY_REDIRECT_URI = os.getenv("SPOTIFY_REDIRECT_URI")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+DISCORD_TOKEN = os.getenv("YOUR_DISCORD_TOKEN")
+SPOTIFY_CLIENT_ID = os.getenv("YOUR_SPOTIFY_CLIENT_ID")
+SPOTIFY_CLIENT_SECRET = os.getenv("YOUR_SPOTIFY_CLIENT_SECRET")
+SPOTIFY_REDIRECT_URI = os.getenv("YOUR_SPOTIFY_REDIRECT_URI")
+OPENAI_API_KEY = os.getenv("YOUR_OPENAI_API_KEY")
 ART_SETTING_FILE = "art_setting.json"
 
 # === INTENTS ===
@@ -193,6 +194,8 @@ def get_permission_level(guild_id, user_id):
         return "No permissions"
 
 # === AI PROMPT GENERATION ===
+# You can modify or add any to any of these to create your own flavor of AI art promtps. 
+# I like metal so these tend to reflect that style of art 
 def generate_prompt():
     adjectives = ["ancient", "neon", "frozen", "haunted", "ethereal", "molten",
                   "gilded", "grim", "sacred", "rusted", "mournful", "vile",
@@ -639,7 +642,7 @@ async def generate_ai_prompt(ctx):
         print(f"[ERROR] Failed to generate prompt: {e}")
         await ctx.send("⚠️ Failed to generate AI prompt.")
 
-@bot.command(name="artchannel")
+@bot.command(name="artchannel", aliases=["ac"])
 async def set_art_channel(ctx, *, channel_name: str):
     gid = str(ctx.guild.id)
     uid = str(ctx.author.id)
@@ -893,7 +896,7 @@ async def remove_track(ctx, *, query: str):
         print(f"[ERROR] {e}")
         await ctx.send(f"Error: {str(e)}")
 
-@bot.command(name="leaderboard")
+@bot.command(name="leaderboard", aliases=["lb"])
 async def leaderboard(ctx):
     try:
         gid = str(ctx.guild.id)
@@ -1081,7 +1084,7 @@ async def who_am_i(ctx):
     await ctx.send(f"You are: **{role}**")
 
 
-@bot.command(name="countdown")
+@bot.command(name="countdown", aliases=["cd"])
 async def countdown(ctx, threshold: int = 3):
     message = await ctx.send("🎵 React to this message to start the listening party countdown!")
     await message.add_reaction("⏯️")
@@ -1109,7 +1112,7 @@ async def countdown(ctx, threshold: int = 3):
     except asyncio.TimeoutError:
         await ctx.send("Countdown cancelled. Not enough reactions in time.")
 
-@bot.command(name="wheel")
+@bot.command(name="wheel", aliases=["w"])
 async def start_wheel(ctx, seconds: int = 60):
     gid = str(ctx.guild.id)
     uid = str(ctx.author.id)
@@ -1169,7 +1172,7 @@ def parse_duration(raw):
         return num * 1440
     return num
 
-@bot.command(name="poll")
+@bot.command(name="poll", aliases=["pl"])
 async def poll_command(ctx, *args):
     try:
         if len(args) == 0:
