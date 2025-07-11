@@ -1,7 +1,7 @@
 #  LPBot – The Discord Listening Party Bot
 A Discord bot that lets users collaboratively build Spotify playlists, track submissions, enforce song limits, and run synchronized countdowns for group listening parties.
 
-Built for music nerds. Powered by Python + Spotify + Discord.
+Built for music nerds. Powered by Python + Spotify + Discord + openai.
 
 ---
 
@@ -22,7 +22,9 @@ Built for music nerds. Powered by Python + Spotify + Discord.
 - !playlist add Group-Playlist to Music                            #Adds a playlist called 'Group-Playlist to the Music Channel of a discord server 
 - !add For Whom the Bell Tolls - Metallica                         #Adds a song to the channels playlist by Song Name - Band Name
 - !add For Whom the Bell Tolls - Metallica - Ride the Lightning    #Adds a song to the channels playlist by Song Name - Band Name - Album Name
-- !add `<spotify track URL>`                                         #Adds a song to the channels playlist by Spotify URL
+- !add `<spotify track URL>`                                       #Adds a song to the channels playlist by Spotify URL
+- !add                                                             #Adds a song using your spotify discord presence (must be visible on discord and have your spotify account linked)
+- !add (while replying to a .fmbot)                                #Adds a song based on the results of fmbots .fm command (server must have .fmbot added) 
 - !remove For Whom the Bell Tolls                                  #Removes song from the channels playlist
 - !link                                                            #Retreives a link to the channels playlist
 - !countdown 3                                                     #Starts a countdown which requires a specific number of users to react to, to initiate
@@ -33,6 +35,9 @@ Built for music nerds. Powered by Python + Spotify + Discord.
 - !leaderboards                                                    #Displays top contributers to the channels playlist
 - !user                                                            #sets user level permissions for the bot
 - !organizer                                                       #sets organizer level permissions for the bot
+- !administrator                                                   #sets administrator level permission for the bot
+- !wheel #                                                         #a method for randomly selecting a user for a LP submission (uses reactions to randomly select a user) the number is the amount of seconds the wheel is open before selecting a winner
+- !poll                                                            #begins a simple poll using the following format !poll `<pollname>` `<# of submissions>` `<time for submissions>` `<time for poll to stay open>` `<# of votes allowed>` 
 - !lphelp                                                          #displays available bot commands 
 - !art <on/off>                                                    #enable channel artwork
 - !refreshart`                                                     #geneates new playlist art
