@@ -3,6 +3,12 @@ A Discord bot that lets users collaboratively build Spotify playlists, track sub
 
 Built for music nerds. Powered by Python + Spotify + Discord + openai.
 
+If you would like to run this bot on your sever feel free to reach out for an invite link 
+
+-or-
+
+feel free to run your own copy of the bot
+
 ---
 
 ##  Features
